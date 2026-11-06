@@ -4,6 +4,19 @@ Apple Silicon Macから別のApple Silicon Macへ、AU / VST / VST3プラグイ�
 
 対応: Apple Silicon、macOS 12以降。Pythonや追加ランタイムは不要です。初回の実機検証環境はmacOS 14.8.9です。プラグイン自体の移行先OS・CPU対応は別途必要です。
 
+## 公証済みZIPのダウンロードとインストール
+
+**[公証済みZIPをダウンロード（Apple Silicon用）](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0/PluginPorter-1.2-build4-arm64-notarized.zip)**
+
+配布版はPluginPorter 1.2（ビルド4）のDeveloper ID署名・Apple公証済みアプリです。macOS 12以降で利用でき、Xcodeなどのビルド用ツールは不要です。
+
+1. 上のリンクからZIPをダウンロードします。
+2. FinderでZIPをダブルクリックして解凍します。
+3. 起動中のPluginPorterがあれば、処理の完了を待って終了します。解凍した `PluginPorter.app` をFinderの **「アプリケーション」** へドラッグします。
+4. Finderの **「アプリケーション」内の `PluginPorter.app`** を開きます。起動すると、このMacのプラグインを自動でスキャンします。
+
+[リリースの詳細](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0) · [SHA-256チェックサム](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0/PluginPorter-1.2-build4-arm64-notarized.zip.sha256)
+
 ## リポジトリからビルドする
 
 Apple Silicon MacとXcode Command Line Toolsを使用します。
