@@ -1,0 +1,12 @@
+#!/bin/zsh
+set -euo pipefail
+ROOT="${0:A:h}"
+APP="$ROOT/PluginPorter.app/Contents/MacOS/PluginPorter"
+if [[ ! -x "$APP" ]]; then
+  APP="$ROOT/dist/PluginPorter.app/Contents/MacOS/PluginPorter"
+fi
+if [[ ! -x "$APP" ]]; then
+  print -u2 './build.command を実行するか、同じフォルダに PluginPorter.app を置いてください。'
+  exit 1
+fi
+exec "$APP" --cli "$@"

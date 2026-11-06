@@ -1,0 +1,10 @@
+.DS_Store
+/dist/
+/PluginPorter.app/
+/.build/
+/Tests/.engine-tests-*
+/Tests/.preset-tests-*
+/Tests/.fixture-*/
+/Tests/.preset-fixture-*/
+*.pluginporter/
+/このMacのプラグイン一覧.csv
