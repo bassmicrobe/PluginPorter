@@ -4,6 +4,8 @@ import Darwin
 
 enum TransferEngine {
     static let fm = FileManager.default
+    private static let maximumEntries = 20_000
+    private static let maximumManifestBytes = 32 * 1024 * 1024
 
     static func export(items: [TransferItem], to destination: URL, progress: (String) -> Void) throws -> TransferManifest {
         guard !items.isEmpty else { throw porterFail("書き出す項目を選択してください。") }
@@ -39,7 +41,9 @@ enum TransferEngine {
         let manifest = TransferManifest(formatVersion: 1, createdAt: ISO8601DateFormatter().string(from: Date()), sourceOS: ProcessInfo.processInfo.operatingSystemVersionString, sourceArchitecture: machineArchitecture(), entries: entries)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(manifest).write(to: stage.appendingPathComponent("manifest.json"), options: .atomic)
+        let manifestData = try encoder.encode(manifest)
+        guard manifestData.count < maximumManifestBytes else { throw porterFail("項目の情報が多すぎるため書き出せません。選択項目を減らしてください。") }
+        try manifestData.write(to: stage.appendingPathComponent("manifest.json"), options: .atomic)
         try fm.moveItem(at: stage, to: destination)
         finished = true
         progress("書き出し完了: \(entries.count) 項目。元のファイルは変更していません。")
@@ -51,11 +55,11 @@ enum TransferEngine {
         let path = archive.appendingPathComponent("manifest.json")
         let attrs = try fm.attributesOfItem(atPath: path.path)
         guard attrs[.type] as? FileAttributeType == .typeRegular,
-              (attrs[.size] as? NSNumber)?.int64Value ?? Int64.max < 32 * 1024 * 1024 else {
+              (attrs[.size] as? NSNumber)?.int64Value ?? Int64.max < maximumManifestBytes else {
             throw porterFail("manifest.json が通常ファイルではないか、大きすぎます。")
         }
         let manifest = try JSONDecoder().decode(TransferManifest.self, from: Data(contentsOf: path))
-        guard manifest.formatVersion == 1, !manifest.entries.isEmpty, manifest.entries.count <= 20000 else {
+        guard manifest.formatVersion == 1, !manifest.entries.isEmpty, manifest.entries.count <= maximumEntries else {
             throw porterFail("未対応または空の移行パッケージです。")
         }
         try validateItems(manifest.entries.map(\.item))
@@ -138,6 +142,15 @@ enum TransferEngine {
     }
 
     static func validateItems(_ items: [TransferItem]) throws {
+        guard items.count <= maximumEntries else { throw porterFail("項目が多すぎます。\(maximumEntries)件以下に分けてください。") }
+        // Plans and manifests are external input. Their aggregate is also displayed
+        // by the UI, so validating each value alone cannot prevent an overflow.
+        _ = try items.reduce(Int64(0)) { total, item in
+            guard item.bytes >= 0 else { throw porterFail("項目の容量が不正です: \(item.name)") }
+            let (sum, overflow) = total.addingReportingOverflow(item.bytes)
+            guard !overflow else { throw porterFail("選択項目の合計容量が大きすぎます。") }
+            return sum
+        }
         var ids = Set<String>()
         var targets: [(String, String)] = []
         for item in items {
@@ -209,9 +222,15 @@ enum TransferEngine {
                 let handle = try FileHandle(forReadingFrom: url)
                 defer { try? handle.close() }
                 while true {
-                    let data = try handle.read(upToCount: 1024 * 1024) ?? Data()
-                    if data.isEmpty { break }
-                    hash.update(data: data)
+                    // Foundation's autoreleased read buffers otherwise accumulate
+                    // until the surrounding worker/CLI operation finishes.
+                    let hasBytes = try autoreleasepool {
+                        let data = try handle.read(upToCount: 1024 * 1024) ?? Data()
+                        guard !data.isEmpty else { return false }
+                        hash.update(data: data)
+                        return true
+                    }
+                    if !hasBytes { break }
                 }
             }
             hash.update(data: Data([0]))

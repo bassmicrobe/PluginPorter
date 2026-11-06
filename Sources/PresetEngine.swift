@@ -263,7 +263,10 @@ enum PresetOrganizer {
         }
         let suffix: [String]
         if let marker = parts.dropLast().firstIndex(where: { markers.contains($0.lowercased()) }) { suffix = Array(parts.dropFirst(marker + 1)) }
-        else if ["vitaltable", "vitallfo", "serumfx", "serumfxrack", "xfershape", "xferpath"].contains(URL(fileURLWithPath: item.sourcePath).pathExtension.lowercased()) { suffix = [pack] + item.sourceRelativePath.components(separatedBy: "/") }
+        else if ["vitaltable", "vitallfo", "serumfx", "serumfxrack", "xfershape", "xferpath"].contains(URL(fileURLWithPath: item.sourcePath).pathExtension.lowercased()) {
+            // Vital already puts the pack above the category directory.
+            suffix = (library.id == "vital" ? [] : [pack]) + item.sourceRelativePath.components(separatedBy: "/")
+        }
         else { return nil }
         guard !suffix.isEmpty else { return nil }
         return (library.id == "vital" ? pack + "/" : "") + targetFolder + "/" + suffix.joined(separator: "/")

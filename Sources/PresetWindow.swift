@@ -169,6 +169,9 @@ final class PresetOrganizerWindowController: NSWindowController, NSWindowDelegat
         addWide(dropArea)
 
         serumPopup.addItems(withTitles: ["Serum", "Serum 2"])
+        serumPopup.setAccessibilityLabel("Serum .fxp の保存先")
+        libraryPopup.setAccessibilityLabel("保存先を確認・変更するライブラリ")
+        assignPopup.setAccessibilityLabel("選んだ行の保存先シンセ")
         serumPopup.item(at: 0)?.representedObject = "serum1"
         serumPopup.item(at: 1)?.representedObject = "serum2"
         if libraries.first(where: { $0.id == "serum1" })?.detected != true,

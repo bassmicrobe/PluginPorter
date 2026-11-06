@@ -107,6 +107,66 @@ let serum2 = xferEnvelope("SerumPreset")
 struct PresetTests {
     static func main() {
         let tests: [(String, () throws -> Void)] = [
+            ("nonregular synth preferences cannot block library detection", {
+                try fixture { f in
+                    let home = f.base.appendingPathComponent("preference-home")
+                    let prefs = home.appendingPathComponent("Library/Preferences/SerumPrefs.json")
+                    try f.fm.createDirectory(at: prefs.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    guard mkfifo(prefs.path, 0o600) == 0 else { throw PresetTestFailure(description: "Could not create inert FIFO fixture") }
+                    let finished = DispatchSemaphore(value: 0)
+                    DispatchQueue.global().async {
+                        _ = PresetOrganizer.defaultLibraries(home: home)
+                        finished.signal()
+                    }
+                    try check(finished.wait(timeout: .now() + 1) == .success, "library detection must skip a named pipe without waiting for a writer")
+                }
+            }),
+            ("input packs remain protected through case variants of their paths", {
+                try fixture { f in
+                    try f.file("Lead.fxp", fxp())
+                    let alternate = f.pack.deletingLastPathComponent().appendingPathComponent("購入 pACK")
+                    guard f.fm.fileExists(atPath: alternate.path) else { return } // Case-sensitive volumes have distinct paths.
+                    let libraries = f.libraries.map { library in
+                        library.id == "serum1"
+                            ? PresetLibrary(id: library.id, name: library.name, rootPath: alternate.path, presetFolder: library.presetFolder, detected: true)
+                            : library
+                    }
+                    let before = try f.snapshot(f.pack)
+                    try mustThrow("case-variant library is the source pack") {
+                        _ = try PresetOrganizer.analyze(folders: [f.pack], libraries: libraries, serumFXPTarget: "serum1", progress: { _ in })
+                    }
+                    let initial = try f.analyze()
+                    let assigned = initial.items.map { PresetOrganizer.assign($0, to: libraries[0]) }
+                    let plan = PresetImportPlan(formatVersion: initial.formatVersion, createdAt: initial.createdAt, libraries: libraries, items: assigned, ignoredFileCount: initial.ignoredFileCount, notes: initial.notes, sourceRoots: initial.sourceRoots)
+                    try mustThrow("case-variant reassignment cannot write into the source") {
+                        _ = try PresetOrganizer.install(plan, progress: { _ in })
+                    }
+                    try check(f.snapshot(f.pack) == before, "original pack remains unchanged")
+                }
+            }),
+            ("Vital loose auxiliary files use one pack folder", {
+                try fixture { f in
+                    try f.file("Shapes/Wave.vitaltable", "inert wavetable fixture")
+                    try f.file("Curves/Slow.vitallfo", "inert lfo fixture")
+                    let plan = try f.analyze()
+                    try check(f.item(plan, "Shapes/Wave.vitaltable").destinationPath == f.target("vital", "購入 Pack/Wavetables/Shapes/Wave.vitaltable").path, "wavetable retains its relative folder without repeating the pack name")
+                    try check(f.item(plan, "Curves/Slow.vitallfo").destinationPath == f.target("vital", "購入 Pack/LFOs/Curves/Slow.vitallfo").path, "LFO retains its relative folder without repeating the pack name")
+                    let report = try PresetOrganizer.install(plan, progress: { _ in })
+                    try check(report.completed.count == 2 && report.failed.isEmpty, "both auxiliary files reach the intended destinations")
+                }
+            }),
+            ("mixed synth fixture keeps unrelated audio unresolved", {
+                try fixture { f in
+                    try f.file("Serum/Tables/Serum.wav")
+                    try f.file("Tables/Unknown.wav")
+                    try f.file("Vital/Wavetables/Vital.wav")
+                    let plan = try f.analyze()
+                    try check(f.item(plan, "Serum/Tables/Serum.wav").targetID == "serum1", "explicit Serum folder stays assigned")
+                    try check(f.item(plan, "Vital/Wavetables/Vital.wav").targetID == "vital", "explicit Vital folder stays assigned")
+                    let unknown = try f.item(plan, "Tables/Unknown.wav")
+                    try check(!unknown.selected && unknown.targetID == nil && unknown.destinationPath == nil, "mixed or unproven target requires manual choice")
+                }
+            }),
             ("Serum and Sylenth1 FXP headers distinguish identical extensions", {
                 try fixture { f in
                     try f.file("Serum/Lead.FXP", fxp())

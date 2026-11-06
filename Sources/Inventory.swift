@@ -5,6 +5,7 @@ enum Inventory {
     private static let fm = FileManager.default
     private static let plugInExtensions = ["component": "AU", "vst": "VST", "vst3": "VST3", "aaxplugin": "AAX"]
     private static let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .isRegularFileKey]
+    private static let maximumMetadataBytes = 2_000_000
 
     static func scan(home: URL, includeData: Bool) throws -> [TransferItem] {
         var items: [TransferItem] = []
@@ -97,18 +98,18 @@ enum Inventory {
             let executableDirectory = source.appendingPathComponent("Contents/MacOS")
             if let executable = info["CFBundleExecutable"] as? String, !executable.isEmpty,
                !executable.contains("/"), executable != ".", executable != ".." {
-                architectures = machOArchitectures(executableDirectory.appendingPathComponent(executable))
+                architectures = machOArchitectures(executableDirectory.appendingPathComponent(executable), bundle: source)
             } else {
                 // Some legitimate KORG/legacy bundles omit CFBundleExecutable.
                 let conventional = executableDirectory.appendingPathComponent(source.deletingPathExtension().lastPathComponent)
-                architectures = machOArchitectures(conventional)
+                architectures = machOArchitectures(conventional, bundle: source)
                 if architectures.isEmpty,
                    let candidates = try? fm.contentsOfDirectory(at: executableDirectory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
                     let regularFiles = candidates.filter {
                         let properties = try? $0.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                         return properties?.isRegularFile == true && properties?.isSymbolicLink != true
                     }
-                    if regularFiles.count == 1 { architectures = machOArchitectures(regularFiles[0]) }
+                    if regularFiles.count == 1 { architectures = machOArchitectures(regularFiles[0], bundle: source) }
                 }
             }
             if architectures.isEmpty { notes.append("CPU対応を判別できませんでした。移行先で互換性を確認してください。") }
@@ -129,11 +130,17 @@ enum Inventory {
     }
 
     private static func bundleInfo(_ url: URL) -> [String: Any] {
-        let plist = url.appendingPathComponent("Contents/Info.plist")
+        let root = url.resolvingSymlinksInPath()
+        let plist = url.appendingPathComponent("Contents/Info.plist").resolvingSymlinksInPath()
         // Metadata is intentionally bounded; discovery never reads presets or license contents.
-        guard let attributes = try? fm.attributesOfItem(atPath: plist.path),
-              let length = attributes[.size] as? NSNumber, length.intValue < 2_000_000,
-              let data = try? Data(contentsOf: plist),
+        // Check the resolved file, not the size of a symlink, and never open a FIFO.
+        guard TransferEngine.contains(root, plist),
+              let attributes = try? fm.attributesOfItem(atPath: plist.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let length = attributes[.size] as? NSNumber, length.intValue < maximumMetadataBytes,
+              let file = try? FileHandle(forReadingFrom: plist) else { return [:] }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: maximumMetadataBytes), data.count < maximumMetadataBytes,
               let value = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else { return [:] }
         return value
     }
@@ -168,9 +175,10 @@ enum Inventory {
         return (bytes, links, unsafeLinks, incomplete)
     }
 
-    private static func machOArchitectures(_ url: URL) -> [String] {
+    private static func machOArchitectures(_ url: URL, bundle: URL) -> [String] {
         // Never traverse a link to an executable outside the bundle.
-        guard let attributes = try? fm.attributesOfItem(atPath: url.path),
+        guard TransferEngine.contains(bundle.resolvingSymlinksInPath(), url.resolvingSymlinksInPath()),
+              let attributes = try? fm.attributesOfItem(atPath: url.path),
               attributes[.type] as? FileAttributeType == .typeRegular,
               let file = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? file.close() }

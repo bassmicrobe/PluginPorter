@@ -11,7 +11,8 @@ private final class PorterPanel: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
-private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+    private let inventoryLoader: (URL, Bool) throws -> [TransferItem]
     private var window: NSWindow!
     private let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     private var items: [TransferItem] = []
@@ -39,6 +40,11 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
     private var presetsButton: NSButton!
     private var presetOrganizer: PresetOrganizerWindowController?
 
+    init(inventoryLoader: @escaping (URL, Bool) throws -> [TransferItem] = { try Inventory.scan(home: $0, includeData: $1) }) {
+        self.inventoryLoader = inventoryLoader
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         buildWindow()
@@ -48,6 +54,12 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        return false
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if busy || presetOrganizer?.isBusy == true {
@@ -75,13 +87,29 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "PluginPorterを終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
+        let fileItem = NSMenuItem()
+        menu.addItem(fileItem)
+        let fileMenu = NSMenu(title: "ファイル")
+        fileMenu.addItem(withTitle: "ウインドウを閉じる", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
         let editItem = NSMenuItem()
         menu.addItem(editItem)
         let editMenu = NSMenu(title: "編集")
+        editMenu.addItem(withTitle: "取り消す", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "やり直す", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "カット", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "コピー", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "ペースト", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "すべて選択", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "ウインドウ")
+        windowMenu.addItem(withTitle: "しまう", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowItem.submenu = windowMenu
+        menu.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = menu
     }
 
@@ -98,6 +126,7 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
         window.title = "PluginPorter"
         window.subtitle = "Mac → Mac プラグイン移行"
         window.minSize = NSSize(width: 950, height: 780)
+        window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
         let content = window.contentView!
@@ -168,6 +197,7 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filterRow.addArrangedSubview(spacer)
         search.placeholderString = "名前・形式・CPU・パスで絞り込み"
+        search.setAccessibilityLabel("名前・形式・CPU・パスで絞り込み")
         search.delegate = self
         search.widthAnchor.constraint(equalToConstant: 260).isActive = true
         filterRow.addArrangedSubview(search)
@@ -406,7 +436,7 @@ private final class PluginPorterDelegate: NSObject, NSApplicationDelegate, NSWin
         begin("プラグインと関連データ候補を調べています… 大容量の音源は時間がかかる場合があります。")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let found = try Inventory.scan(home: self.home, includeData: true)
+                let found = try self.inventoryLoader(self.home, true)
                 DispatchQueue.main.async {
                     self.archiveURL = nil
                     self.items = found

@@ -11,6 +11,29 @@ func jsonWrite<T: Encodable>(_ value: T, path: String?) throws {
     else { FileHandle.standardOutput.write(data); print("") }
 }
 
+// Reports and plans must not bypass the copy engine's source/target protection.
+// Check before copying, so an invalid report path leaves all library data intact.
+func validateJSONOutput(_ path: String?, protecting protectedURLs: [URL]) throws {
+    guard let path = path else { return }
+    guard !path.isEmpty, !path.contains("\0") else { throw porterFail("JSONの保存先パスが不正です。") }
+    let output = URL(fileURLWithPath: path).standardizedFileURL
+    let parent = output.deletingLastPathComponent()
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw porterFail("JSONの保存先の親フォルダがありません。")
+    }
+    let resolved = parent.resolvingSymlinksInPath().appendingPathComponent(output.lastPathComponent).resolvingSymlinksInPath()
+    guard !protectedURLs.contains(where: {
+        let protected = $0.standardizedFileURL.resolvingSymlinksInPath()
+        return TransferEngine.contains(protected, resolved) || TransferEngine.contains(resolved, protected)
+    }) else {
+        throw porterFail("JSONの保存先は、元データ・入力プラン・移行パッケージ・コピー先の外に指定してください。")
+    }
+    if FileManager.default.fileExists(atPath: output.path, isDirectory: &isDirectory), isDirectory.boolValue {
+        throw porterFail("JSONの保存先にフォルダは指定できません。")
+    }
+}
+
 let help = """
 PluginPorter 1.2 — Macのプラグインをコピーで移行・プリセット整理
 
@@ -40,6 +63,15 @@ preset-install: 整理プランで選択した項目をコピー。既存ファ�
 
 func cli(_ args: [String]) throws -> Int32 {
     guard let command = args.first, command != "--help", command != "help" else { print(help); return 0 }
+    let commandOptions: [String: Set<String>] = [
+        "scan": ["--home", "--include-data", "--match", "--output"],
+        "export": ["--home", "--plan", "--match"],
+        "inspect": [], "verify": [],
+        "restore": ["--home", "--ids", "--dry-run", "--report"],
+        "preset-plan": ["--home", "--serum-target", "--output"],
+        "preset-install": ["--report"]
+    ]
+    guard let allowedOptions = commandOptions[command] else { throw porterFail("不明なコマンド: \(command)\n\(help)") }
     var positionals: [String] = []
     var options: [String: String] = [:]
     var flags = Set<String>()
@@ -49,11 +81,21 @@ func cli(_ args: [String]) throws -> Int32 {
     while i < args.count {
         let arg = args[i]
         if valueOptions.contains(arg) {
-            guard i + 1 < args.count else { throw porterFail("引数が不足しています: \(arg)") }
-            options[arg] = args[i + 1]; i += 2
-        } else if flagOptions.contains(arg) { flags.insert(arg); i += 1 }
+            guard allowedOptions.contains(arg) else { throw porterFail("\(command)では使用できないオプションです: \(arg)") }
+            guard options[arg] == nil else { throw porterFail("オプションが重複しています: \(arg)") }
+            guard i + 1 < args.count, !args[i + 1].isEmpty, !args[i + 1].hasPrefix("--"), !args[i + 1].contains("\0") else {
+                throw porterFail("引数が不足しているか不正です: \(arg)")
+            }
+            options = options.merging([arg: args[i + 1]]) { _, new in new }; i += 2
+        } else if flagOptions.contains(arg) {
+            guard allowedOptions.contains(arg), !flags.contains(arg) else { throw porterFail("使用できないか重複したオプションです: \(arg)") }
+            flags = flags.union([arg]); i += 1
+        }
         else if arg.hasPrefix("--") { throw porterFail("不明なオプション: \(arg)") }
-        else { positionals.append(arg); i += 1 }
+        else {
+            guard !arg.isEmpty, !arg.contains("\0") else { throw porterFail("パスが空か不正です。") }
+            positionals = positionals + [arg]; i += 1
+        }
     }
     let home = options["--home"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
     func package() throws -> URL {
@@ -67,25 +109,38 @@ func cli(_ args: [String]) throws -> Int32 {
     switch command {
     case "preset-plan":
         guard !positionals.isEmpty, let output = options["--output"] else { throw porterFail("パックフォルダと --output PLAN.json を指定してください。") }
+        try validateJSONOutput(output, protecting: positionals.map { URL(fileURLWithPath: $0) })
         let libraries = PresetOrganizer.defaultLibraries(home: home)
         let plan = try PresetOrganizer.analyze(folders: positionals.map { URL(fileURLWithPath: $0) }, libraries: libraries, serumFXPTarget: options["--serum-target"] ?? "serum1", progress: log)
         try PresetOrganizer.savePlan(plan, to: URL(fileURLWithPath: output))
         log("\(plan.items.count) 項目を解析、\(plan.items.filter(\.selected).count) 項目が保存可能。まだコピーしていません。")
     case "preset-install":
-        let plan = try PresetOrganizer.loadPlan(at: package())
+        let planURL = try package()
+        let plan = try PresetOrganizer.loadPlan(at: planURL)
+        let protectedPaths = (plan.sourceRoots ?? []) + plan.items.map(\.sourceRoot) + plan.items.map(\.sourcePath) + plan.libraries.map(\.rootPath)
+        try validateJSONOutput(options["--report"], protecting: [planURL] + protectedPaths.map { URL(fileURLWithPath: $0) })
         let report = try PresetOrganizer.install(plan, progress: log)
         try jsonWrite(report, path: options["--report"])
         return report.failed.isEmpty ? 0 : 2
     case "scan":
         guard positionals.isEmpty else { throw porterFail("scanに位置引数は不要です。") }
-        let items = matching(try Inventory.scan(home: home, includeData: flags.contains("--include-data")))
+        let scanned = try Inventory.scan(home: home, includeData: flags.contains("--include-data"))
+        try validateJSONOutput(options["--output"], protecting: scanned.map { URL(fileURLWithPath: $0.sourcePath) })
+        let items = matching(scanned)
         try jsonWrite(items, path: options["--output"])
         log("\(items.count) 項目、論理サイズ合計 \(formattedBytes(items.reduce(0) { $0 + $1.bytes }))。一覧には認証情報の内容を含めません。")
     case "export":
         let destination = try package()
         let items: [TransferItem]
         if let plan = options["--plan"] {
-            items = matching(try JSONDecoder().decode([TransferItem].self, from: Data(contentsOf: URL(fileURLWithPath: plan))))
+            let url = URL(fileURLWithPath: plan)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let maximumPlanBytes: Int64 = 32 * 1024 * 1024
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.size] as? NSNumber)?.int64Value ?? Int64.max < maximumPlanBytes else {
+                throw porterFail("書き出しプランが通常ファイルではないか、大きすぎます。")
+            }
+            items = matching(try JSONDecoder().decode([TransferItem].self, from: Data(contentsOf: url)))
         } else {
             let scanned = matching(try Inventory.scan(home: home, includeData: false))
             for blocked in scanned where blocked.exportBlockReason != nil {
@@ -107,9 +162,14 @@ func cli(_ args: [String]) throws -> Int32 {
     case "restore":
         let archive = try package()
         guard options["--home"] != nil else { throw porterFail("restoreには --home /Users/移行先ユーザー を必ず指定してください。") }
+        guard !(flags.contains("--dry-run") && options["--report"] != nil) else { throw porterFail("--dry-runでは --report は使用できません。") }
         let ids = options["--ids"].map { Set($0.split(separator: ",").map(String.init)) }
+        if let ids = ids, ids.isEmpty { throw porterFail("復元する項目を選択してください。") }
+        let manifest = try TransferEngine.readManifest(at: archive)
+        let targets = try manifest.entries.map { try scopeRoot($0.item.scope, home: home).appendingPathComponent($0.item.relativePath) }
+        let originalSources = manifest.entries.map { URL(fileURLWithPath: $0.item.sourcePath) }
+        try validateJSONOutput(options["--report"], protecting: [archive] + targets + originalSources)
         if flags.contains("--dry-run") {
-            let manifest = try TransferEngine.readManifest(at: archive)
             let known = Set(manifest.entries.map { $0.item.id })
             if let ids = ids, !ids.isSubset(of: known) { throw porterFail("パッケージに存在しない項目IDです。") }
             for entry in manifest.entries where ids == nil || ids!.contains(entry.item.id) {

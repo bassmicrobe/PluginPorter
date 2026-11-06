@@ -101,6 +101,100 @@ func runCommand(_ executable: String, _ arguments: [String]) throws -> (Int32, D
 struct EngineTests {
     static func main() throws {
         let tests: [(String, () throws -> Void)] = [
+            ("export rejects more entries than the archive reader supports", {
+                let items = (0..<20_001).map { index in
+                    TransferItem(id: UUID().uuidString, name: "Fixture\(index)", kind: "関連データ候補",
+                                 scope: "external", relativePath: "Fixture\(index)", sourcePath: "/inert-fixture/\(index)",
+                                 bytes: 0, architectures: [], notes: [])
+                }
+                try expectThrows("oversized item list is rejected before reading source files") {
+                    try TransferEngine.validateItems(items)
+                }
+            }),
+            ("oversized export metadata cannot publish an unreadable archive", {
+                try withFixture { f in
+                    let original = try f.plugin("MetadataLimit")
+                    let item = TransferItem(id: original.id, name: original.name, kind: original.kind,
+                                            scope: original.scope, relativePath: original.relativePath,
+                                            sourcePath: original.sourcePath, bytes: original.bytes,
+                                            architectures: original.architectures,
+                                            notes: [String(repeating: "x", count: 32 * 1024 * 1024)])
+                    let before = try TransferEngine.fingerprint(URL(fileURLWithPath: original.sourcePath))
+                    try expectThrows("export cannot exceed the reader metadata limit") { _ = try f.export([item]) }
+                    try expect(!f.fm.fileExists(atPath: f.archive.path), "no unreadable archive is published")
+                    try expect(try f.fm.contentsOfDirectory(atPath: f.base.path).filter { $0.hasPrefix(".PluginPorter-") }.isEmpty, "oversized temporary export is removed")
+                    try expect(try TransferEngine.fingerprint(URL(fileURLWithPath: original.sourcePath)).0 == before.0, "source survives rejected export")
+                }
+            }),
+            ("untrusted byte counts reject negative values and aggregate overflow", {
+                for sizes in [[Int64(-1)], [Int64.max, Int64(1)]] {
+                    try withFixture { f in
+                        let items = try sizes.enumerated().map { index, bytes in
+                            let original = try f.plugin("Size\(index)")
+                            return TransferItem(id: original.id, name: original.name, kind: original.kind,
+                                                scope: original.scope, relativePath: original.relativePath,
+                                                sourcePath: original.sourcePath, bytes: bytes,
+                                                architectures: original.architectures, notes: original.notes)
+                        }
+                        try expectThrows("invalid byte counts cannot be exported") { _ = try f.export(items) }
+                        try expect(!f.fm.fileExists(atPath: f.archive.path), "invalid plan publishes no archive")
+                        let valid = try f.plugin("Valid")
+                        _ = try f.export([valid])
+                        let manifest = try TransferEngine.readManifest(at: f.archive)
+                        let invalid = TransferManifest(formatVersion: manifest.formatVersion,
+                                                       createdAt: manifest.createdAt, sourceOS: manifest.sourceOS,
+                                                       sourceArchitecture: manifest.sourceArchitecture,
+                                                       entries: items.map { ArchiveEntry(item: $0, digest: manifest.entries[0].digest, fileCount: 0) })
+                        try JSONEncoder().encode(invalid).write(to: f.archive.appendingPathComponent("manifest.json"))
+                        try expectThrows("invalid byte counts cannot be loaded into the UI") {
+                            _ = try TransferEngine.readManifest(at: f.archive)
+                        }
+                        try expect(try f.fm.contentsOfDirectory(atPath: f.home.path).isEmpty, "rejection leaves destination untouched")
+                    }
+                }
+            }),
+            ("inventory does not read metadata through an external symlink", {
+                try withFixture { f in
+                    let original = try f.plugin("Metadata")
+                    let bundle = URL(fileURLWithPath: original.sourcePath)
+                    let info = bundle.appendingPathComponent("Contents/Info.plist")
+                    let external = f.base.appendingPathComponent("outside.plist")
+                    try PropertyListSerialization.data(fromPropertyList: ["CFBundleExecutable": "Alternate"], format: .xml, options: 0).write(to: external)
+                    try f.fm.removeItem(at: info)
+                    try f.fm.createSymbolicLink(atPath: info.path, withDestinationPath: external.path)
+                    // Minimal read-only Mach-O headers; neither file is executed.
+                    try Data([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0, 0, 0x01]).write(to: bundle.appendingPathComponent("Contents/MacOS/Metadata"))
+                    try Data([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0, 0, 0x01]).write(to: bundle.appendingPathComponent("Contents/MacOS/Alternate"))
+                    let item = try Inventory.makeItem(url: bundle, home: f.home)
+                    try expect(item.architectures == ["x86_64"], "unsafe metadata is ignored in favor of the conventional in-bundle executable")
+                    try expect(item.exportBlockReason != nil, "escaping metadata link remains blocked for export")
+                    try f.fm.removeItem(at: info)
+                    try expect(mkfifo(info.path, 0o600) == 0, "create inert FIFO metadata fixture")
+                    let fifoItem = try Inventory.makeItem(url: bundle, home: f.home)
+                    try expect(fifoItem.architectures == ["x86_64"], "FIFO metadata is ignored without blocking")
+                    try f.fm.removeItem(at: info)
+                    let internalInfo = bundle.appendingPathComponent("Contents/ActualInfo.plist")
+                    try f.fm.copyItem(at: external, to: internalInfo)
+                    try f.fm.createSymbolicLink(atPath: info.path, withDestinationPath: "ActualInfo.plist")
+                    let linkedItem = try Inventory.makeItem(url: bundle, home: f.home)
+                    try expect(linkedItem.architectures == ["arm64"], "safe internal metadata links remain supported")
+                }
+            }),
+            ("inventory never inspects an executable outside its bundle through an ancestor link", {
+                try withFixture { f in
+                    let original = try f.plugin("LinkedExecutable")
+                    let bundle = URL(fileURLWithPath: original.sourcePath)
+                    let executableDirectory = bundle.appendingPathComponent("Contents/MacOS")
+                    let external = f.base.appendingPathComponent("outside-executables")
+                    try f.fm.createDirectory(at: external, withIntermediateDirectories: true)
+                    try Data([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0, 0, 0x01]).write(to: external.appendingPathComponent("LinkedExecutable"))
+                    try f.fm.removeItem(at: executableDirectory)
+                    try f.fm.createSymbolicLink(atPath: executableDirectory.path, withDestinationPath: external.path)
+                    let item = try Inventory.makeItem(url: bundle, home: f.home)
+                    try expect(item.architectures.isEmpty, "external executable data is not inspected")
+                    try expect(item.exportBlockReason != nil, "external executable link remains blocked for export")
+                }
+            }),
             ("roundtrip, source preservation, internal symlink and user home", {
                 try withFixture { f in
                     let item = try f.plugin()

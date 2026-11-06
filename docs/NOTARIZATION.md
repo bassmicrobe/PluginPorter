@@ -14,6 +14,7 @@ Apple Silicon Mac、Xcode Command Line ToolsまたはXcode、公証に使用で�
 ./build.command
 ./Tests/run-engine-tests.sh
 ./Tests/run-preset-tests.sh
+./Tests/run-cli-tests.sh
 ./pluginporter --help
 ```
 
