@@ -4,20 +4,22 @@ Apple Silicon Macから別のApple Silicon Macへ、AU / VST / VST3プラグイ�
 
 対応: Apple Silicon、macOS 12以降。Pythonや追加ランタイムは不要です。初回の実機検証環境はmacOS 14.8.9です。プラグイン自体の移行先OS・CPU対応は別途必要です。
 
-2026-11-07の監査修正はローカルビルド5に含まれます。CLIのJSON出力による元データの上書き防止、大容量検証のメモリー削減、ウインドウ再表示などを修正しました。[監査報告](docs/audit-2026-11-07.md)に検証結果と未確認範囲を記録しています。下記の公開済みビルド4には、これらの修正は含まれません。ビルド5はまだDeveloper ID署名・公証・公開を行っていません。
+2026-11-07の監査修正を含むビルド5を公開しました。CLIのJSON出力による元データの上書き防止、大容量検証のメモリー削減、ウインドウ再表示などを修正しました。[監査報告](docs/audit-2026-11-07.md)に検証結果と未確認範囲を記録しています。
 
-## 公証済みZIPのダウンロードとインストール
+## ビルド5のダウンロードとインストール
 
-**[公証済みZIPをダウンロード（Apple Silicon用）](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0/PluginPorter-1.2-build4-arm64-notarized.zip)**
+**[ビルド5のZIPをダウンロード（Apple Silicon用・Developer ID署名／公証なし）](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-adhoc.zip)**
 
-配布版はPluginPorter 1.2（ビルド4）のDeveloper ID署名・Apple公証済みアプリです。macOS 12以降で利用でき、Xcodeなどのビルド用ツールは不要です。
+配布版はPluginPorter 1.2（ビルド5）、macOS 12以降・Apple Silicon用です。**アドホック署名であり、Developer ID署名・Apple公証はありません。** ZIP展開後の整合性検証とCLI回帰テストは成功しましたが、Gatekeeper評価（`spctl`）は拒否されました。ダウンロードしたアプリとしての別Macでの初回起動は未確認で、macOSの保護により起動が制限される場合があります。
 
 1. 上のリンクからZIPをダウンロードします。
 2. FinderでZIPをダブルクリックして解凍します。
 3. 起動中のPluginPorterがあれば、処理の完了を待って終了します。解凍した `PluginPorter.app` をFinderの **「アプリケーション」** へドラッグします。
-4. Finderの **「アプリケーション」内の `PluginPorter.app`** を開きます。起動すると、このMacのプラグインを自動でスキャンします。
+4. Finderの **「アプリケーション」内の `PluginPorter.app`** を開きます。起動すると、このMacのプラグインを自動でスキャンします。macOSの保護により起動できない場合は、以下のソースからのビルドを利用してください。
 
-[リリースの詳細](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0) · [SHA-256チェックサム](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0/PluginPorter-1.2-build4-arm64-notarized.zip.sha256)
+[リリースの詳細・更新時の注意点](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0-build5) · [SHA-256チェックサム](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-adhoc.zip.sha256)
+
+[旧ビルド4（Developer ID署名・公証済み）](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0)も保持しています。ただし、ビルド5の監査修正は含まれません。
 
 ## リポジトリからビルドする
 
