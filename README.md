@@ -8,16 +8,18 @@ Apple Silicon Macから別のApple Silicon Macへ、AU / VST / VST3プラグイ�
 
 ## ビルド5のダウンロードとインストール
 
-**[ビルド5のZIPをダウンロード（Apple Silicon用・Developer ID署名／公証なし）](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-adhoc.zip)**
+**[ビルド5のZIPをダウンロード（Apple Silicon用・Developer ID署名／Apple公証済み）](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-notarized.zip)**
 
-配布版はPluginPorter 1.2（ビルド5）、macOS 12以降・Apple Silicon用です。**アドホック署名であり、Developer ID署名・Apple公証はありません。** ZIP展開後の整合性検証とCLI回帰テストは成功しましたが、Gatekeeper評価（`spctl`）は拒否されました。ダウンロードしたアプリとしての別Macでの初回起動は未確認で、macOSの保護により起動が制限される場合があります。
+配布版はPluginPorter 1.2（ビルド5）、macOS 12以降・Apple Silicon用です。**Developer ID署名・Apple公証済みで、公証結果はAcceptedです。** チケット添付後のZIPを展開し、署名・チケット・Gatekeeperの `accepted / Notarized Developer ID` とCLI回帰テストを確認しました。このMacの `/Applications/PluginPorter.app` からの起動とスキャンも確認しています。別Macでの初回起動、macOS 12実機、実DAWでの動作は未確認です。
 
 1. 上のリンクからZIPをダウンロードします。
 2. FinderでZIPをダブルクリックして解凍します。
 3. 起動中のPluginPorterがあれば、処理の完了を待って終了します。解凍した `PluginPorter.app` をFinderの **「アプリケーション」** へドラッグします。
 4. Finderの **「アプリケーション」内の `PluginPorter.app`** を開きます。起動すると、このMacのプラグインを自動でスキャンします。macOSの保護により起動できない場合は、以下のソースからのビルドを利用してください。
 
-[リリースの詳細・更新時の注意点](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0-build5) · [SHA-256チェックサム](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-adhoc.zip.sha256)
+[リリースの詳細・更新時の注意点](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0-build5) · [SHA-256チェックサム](https://github.com/bassmicrobe/PluginPorter/releases/download/v1.2.0-build5/PluginPorter-1.2-build5-arm64-notarized.zip.sha256)
+
+同じリリースの `PluginPorter-1.2-build5-arm64-adhoc.zip` は履歴として保持した当初の配布物で、Developer ID署名・Apple公証はありません。通常は上記の公証済みZIPを使用してください。
 
 [旧ビルド4（Developer ID署名・公証済み）](https://github.com/bassmicrobe/PluginPorter/releases/tag/v1.2.0)も保持しています。ただし、ビルド5の監査修正は含まれません。
 
