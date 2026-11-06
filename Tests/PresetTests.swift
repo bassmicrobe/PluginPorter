@@ -416,11 +416,88 @@ struct PresetTests {
                     let inside = f.pack.appendingPathComponent("SerumLibrary")
                     try f.fm.createDirectory(at: inside, withIntermediateDirectories: true)
                     let index = f.libraries.firstIndex { $0.id == "serum1" }!
+                    var plan = try f.analyze()
                     f.libraries[index].rootPath = inside.path
-                    let plan = try f.analyze()
+                    plan.libraries = f.libraries
+                    plan.items[0] = PresetOrganizer.assign(plan.items[0], to: f.libraries[index])
                     let before = try f.snapshot(f.pack)
+                    try mustThrow("analysis rejects a library in the source pack") { _ = try f.analyze() }
                     try mustThrow("library contained in original pack") { _ = try PresetOrganizer.install(plan, progress: { _ in }) }
                     try check(f.snapshot(f.pack) == before, "source pack remains unchanged")
+                }
+            }),
+            ("another input pack is protected even when its items are unselected", {
+                try fixture { f in
+                    try f.file("A.h2p", "#AM=Diva\nfixture")
+                    try f.file("Z.fxp", fxp())
+                    let otherPack = f.base.appendingPathComponent("Other Pack")
+                    try f.write(Data("#AM=Hive\nkeep original".utf8), to: otherPack.appendingPathComponent("Keep.h2p"))
+                    var plan = try f.analyze(roots: [f.pack, otherPack])
+                    let index = plan.libraries.firstIndex { $0.id == "serum1" }!
+                    plan.libraries[index].rootPath = otherPack.path
+                    for row in plan.items.indices {
+                        if plan.items[row].targetID == "serum1" {
+                            plan.items[row] = PresetOrganizer.assign(plan.items[row], to: plan.libraries[index])
+                        }
+                        if plan.items[row].sourceRoot == otherPack.path { plan.items[row].selected = false }
+                    }
+                    let beforeSource = try f.snapshot(f.pack)
+                    let beforeOther = try f.snapshot(otherPack)
+                    let beforeReceiving = try f.snapshot(f.receiving)
+                    try mustThrow("a selected destination is inside another unselected source pack") {
+                        _ = try PresetOrganizer.install(plan, progress: { _ in })
+                    }
+                    try check(f.snapshot(f.pack) == beforeSource && f.snapshot(otherPack) == beforeOther, "both original input packs remain unchanged")
+                    try check(f.snapshot(f.receiving) == beforeReceiving, "safe earlier item is not copied before preflight fails")
+                }
+            }),
+            ("analysis protects an input pack with no recognized files", {
+                try fixture { original in
+                    var f = original
+                    try f.file("Lead.fxp", fxp())
+                    let otherPack = f.base.appendingPathComponent("Documents Only Pack")
+                    try f.write(Data("keep original".utf8), to: otherPack.appendingPathComponent("README.txt"))
+                    let index = f.libraries.firstIndex { $0.id == "serum1" }!
+                    f.libraries[index].rootPath = otherPack.path
+                    let before = try f.snapshot(otherPack)
+                    try mustThrow("destination is within another input without any plan items") {
+                        _ = try f.analyze(roots: [f.pack, otherPack])
+                    }
+                    try check(f.snapshot(otherPack) == before, "ignored-only input pack remains unchanged")
+                }
+            }),
+            ("saved plans retain ignored-only input roots after library reassignment", {
+                try fixture { f in
+                    try f.file("Lead.fxp", fxp())
+                    let otherPack = f.base.appendingPathComponent("Documents Only Pack")
+                    try f.write(Data("keep original".utf8), to: otherPack.appendingPathComponent("README.txt"))
+                    let original = try f.analyze(roots: [f.pack, otherPack])
+                    let planURL = f.base.appendingPathComponent("reviewed-plan.json")
+                    try PresetOrganizer.savePlan(original, to: planURL)
+                    var plan = try PresetOrganizer.loadPlan(at: planURL)
+                    try check(Set(plan.sourceRoots ?? []) == Set([f.pack.path, otherPack.path]), "all original input roots survive saving and loading")
+                    let index = plan.libraries.firstIndex { $0.id == "serum1" }!
+                    plan.libraries[index].rootPath = otherPack.path
+                    plan.items[0] = PresetOrganizer.assign(plan.items[0], to: plan.libraries[index])
+                    let before = try f.snapshot(otherPack)
+                    try mustThrow("a library reassigned into an ignored-only source root") {
+                        _ = try PresetOrganizer.install(plan, progress: { _ in })
+                    }
+                    try check(f.snapshot(otherPack) == before, "ignored-only original remains unchanged after reassignment")
+                }
+            }),
+            ("legacy plans without sourceRoots still decode and install", {
+                try fixture { f in
+                    try f.file("Lead.fxp", fxp())
+                    let original = try f.analyze()
+                    var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+                    object.removeValue(forKey: "sourceRoots")
+                    let planURL = f.base.appendingPathComponent("legacy-plan.json")
+                    try JSONSerialization.data(withJSONObject: object).write(to: planURL)
+                    let plan = try PresetOrganizer.loadPlan(at: planURL)
+                    try check(plan.sourceRoots == nil && plan.items.count == 1, "legacy plan decodes without the optional field")
+                    let report = try PresetOrganizer.install(plan, progress: { _ in })
+                    try check(report.completed.count == 1 && report.failed.isEmpty, "legacy plan retains existing valid install behavior")
                 }
             })
         ]

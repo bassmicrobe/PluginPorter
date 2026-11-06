@@ -102,11 +102,17 @@ enum PresetOrganizer {
             if let target = target, let library = libraries.first(where: { $0.id == target }) { item = assign(item, to: library) }
             items.append(item)
         }
+        let sourceRoots = roots.map { $0.resolvingSymlinksInPath() }
+        for item in items {
+            if let path = item.destinationPath {
+                try requireOutsideSourceRoots(URL(fileURLWithPath: path), roots: sourceRoots)
+            }
+        }
         if items.contains(where: { $0.kind != "preset" && $0.kind != "unknown" }) {
             notes.append("付属素材はTables／Noises／Samplesなどの下の階層を維持します。プリセット内の参照先の書き換えは行いません。")
         }
         if ignored > 0 { notes.append("通常のループ・ドラム素材、画像、説明書、リンク等の \(ignored) ファイルは対象外です。") }
-        return PresetImportPlan(formatVersion: 1, createdAt: ISO8601DateFormatter().string(from: Date()), libraries: libraries, items: items.sorted { $0.sourcePath.localizedStandardCompare($1.sourcePath) == .orderedAscending }, ignoredFileCount: ignored, notes: notes)
+        return PresetImportPlan(formatVersion: 1, createdAt: ISO8601DateFormatter().string(from: Date()), libraries: libraries, items: items.sorted { $0.sourcePath.localizedStandardCompare($1.sourcePath) == .orderedAscending }, ignoredFileCount: ignored, notes: notes, sourceRoots: sourceRoots.map(\.path))
     }
 
     private static func identify(_ url: URL) throws -> (id: String?, kind: String, reason: String) {
@@ -269,6 +275,9 @@ enum PresetOrganizer {
         let selected = plan.items.filter(\.selected)
         guard !selected.isEmpty else { throw porterFail("保存できるファイルを選択してください。") }
         guard selected.count <= 200000 else { throw porterFail("項目が多すぎます。") }
+        let recordedRoots = (plan.sourceRoots ?? []) + plan.items.map(\.sourceRoot)
+        guard recordedRoots.allSatisfy({ $0.hasPrefix("/") && !$0.contains("\0") }) else { throw porterFail("整理プランの元フォルダが不正です。") }
+        let sourceRoots = Set(recordedRoots).map { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath() }
         var validated: [(PresetImportItem, URL, String, Int)] = []
         var ids = Set<String>()
         // Validate the entire plan, file type and source path before creating directories.
@@ -292,7 +301,7 @@ enum PresetOrganizer {
             guard let path = recomputed.destinationPath, path == item.destinationPath else { throw porterFail("保存先が不正または変更されています: \(source.lastPathComponent)") }
             let target = URL(fileURLWithPath: path)
             try TransferEngine.validateDestination(target, home: fm.homeDirectoryForCurrentUser)
-            guard !TransferEngine.contains(root.resolvingSymlinksInPath(), target) else { throw porterFail("購入パックの元フォルダ内へは保存しません。別のライブラリルートを選択してください。") }
+            try requireOutsideSourceRoots(target, roots: sourceRoots)
             progress("コピー前検証: \(source.lastPathComponent)")
             let (hash, count) = try TransferEngine.fingerprint(source)
             validated.append((item, target, hash, count))
@@ -326,6 +335,13 @@ enum PresetOrganizer {
         }
         progress("保存完了 \(report.completed.count) / スキップ \(report.skipped.count) / 失敗 \(report.failed.count)")
         return report
+    }
+
+    private static func requireOutsideSourceRoots(_ target: URL, roots: [URL]) throws {
+        let resolved = target.resolvingSymlinksInPath()
+        guard !roots.contains(where: { TransferEngine.contains($0, resolved) }) else {
+            throw porterFail("選択した購入パックの元フォルダ内へは保存しません。別のライブラリルートを選択してください。")
+        }
     }
 
     static func savePlan(_ plan: PresetImportPlan, to url: URL) throws {

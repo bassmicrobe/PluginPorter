@@ -31,6 +31,8 @@ struct PresetImportPlan: Codable {
     var items: [PresetImportItem]
     var ignoredFileCount: Int
     var notes: [String]
+    // Retain inputs with no recognized items so later library changes cannot write into them.
+    var sourceRoots: [String]? = nil
 }
 
 // API implemented in PresetEngine.swift:
